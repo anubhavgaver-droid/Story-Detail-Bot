@@ -1,15 +1,17 @@
 """
 Story Details Bot + Admin Control Panel
-Library: Kurigram (pyrogram namespace) + PyMongo Async  |  Deploy: Render Web Service (free)
+Library: Kurigram (pyrogram) + PyMongo Async + RapidFuzz  |  Story card: Telegram Rich Message
+Deploy: Render Web Service (free)
 Saari settings / story criteria: config.py
 """
 import asyncio
-import difflib
 import html
+import json
 import logging
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -20,6 +22,7 @@ asyncio.set_event_loop(loop)
 from bson import ObjectId                                   # noqa: E402  (pymongo ke saath aata hai)
 from bson.errors import InvalidId                           # noqa: E402
 from pymongo import AsyncMongoClient                        # noqa: E402
+from rapidfuzz import fuzz, process                         # noqa: E402
 from pyrogram import Client, filters, idle                  # noqa: E402
 from pyrogram.enums import ChatType, ParseMode              # noqa: E402
 from pyrogram.errors import MessageNotModified              # noqa: E402
@@ -98,14 +101,84 @@ def norm_url(u):
     return None
 
 
+async def button_pairs(s=None):
+    pairs = [(x["label"], x["url"]) for x in (s or {}).get("buttons", [])]
+    async for x in buttons.find({}).sort("order", 1):
+        pairs.append((x["label"], x["url"]))
+    return pairs
+
+
 async def build_kb(s=None):
-    rows = [[B(b["label"], url=b["url"])] for b in (s or {}).get("buttons", [])]
-    async for b in buttons.find({}).sort("order", 1):
-        rows.append([B(b["label"], url=b["url"])])
-    return M(rows) if rows else None
+    pairs = await button_pairs(s)
+    return M([[B(label, url=url)] for label, url in pairs]) if pairs else None
+
+
+# ───────────── Rich Message (Bot API 10.1+): table wala story card ─────────────
+def rich_card(s):
+    parts = []
+    if s.get("photo"):
+        parts.append('<img src="tg://photo?id=poster"/>')
+    parts.append(f"<h2>{esc(s['name'])}</h2>")
+    cell = 'align="left" valign="middle"'
+    rows = []
+    for key in C.CARD_ORDER:
+        if key == "@total":
+            total = int(s.get("regular", 0)) + int(s.get("extra", 0))
+            rows.append(f'<tr><th {cell}>{esc(C.TOTAL_LABEL)}</th><td {cell}><b>{total}</b></td></tr>')
+            continue
+        v = s.get(key)
+        if v in (None, ""):
+            continue
+        sch = S[key]
+        if sch["kind"] == "choice" and isinstance(sch["choices"], dict):
+            v = sch["choices"].get(v, v)
+        rows.append(f'<tr><th {cell}>{sch["emoji"]} {esc(sch["label"])}</th>'
+                    f'<td {cell}>{esc(str(v))}</td></tr>')
+    attrs = "bordered" + (" striped" if C.RICH_TABLE_STRIPED else "")
+    parts.append(f"<table {attrs}>{''.join(rows)}</table>")
+    note = s.get(C.NOTE_KEY)
+    if note:
+        parts.append(f"<blockquote><p>{esc(note)}</p></blockquote>")
+    return "".join(parts)
+
+
+def _api_call(method, payload):
+    """Bot API ko seedha HTTPS se bulata hai (rich message ke liye)"""
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{C.BOT_TOKEN}/{method}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            return json.load(e)
+        except Exception:
+            return {"ok": False, "description": f"HTTP {e.code}"}
+    except Exception as e:
+        return {"ok": False, "description": str(e)}
+
+
+async def send_rich(chat_id, s, reply_to=None):
+    rm = {"html": rich_card(s)}
+    if s.get("photo"):
+        rm["media"] = [{"id": "poster", "media": {"type": "photo", "media": s["photo"]}}]
+    payload = {"chat_id": chat_id, "rich_message": rm}
+    pairs = await button_pairs(s)
+    if pairs:
+        payload["reply_markup"] = {"inline_keyboard": [[{"text": t, "url": u}] for t, u in pairs]}
+    if reply_to:
+        payload["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
+    res = await asyncio.to_thread(_api_call, "sendRichMessage", payload)
+    if not res.get("ok"):
+        log.warning("sendRichMessage fail, purana format use hoga: %s", res.get("description"))
+    return bool(res.get("ok"))
 
 
 async def send_story(chat_id, s):
+    if C.RICH_MESSAGES and await send_rich(chat_id, s):
+        return
     kb = await build_kb(s)
     if s.get("photo"):
         try:
@@ -116,6 +189,8 @@ async def send_story(chat_id, s):
 
 
 async def reply_story(m, s):
+    if C.RICH_MESSAGES and await send_rich(m.chat.id, s, m.id):
+        return
     kb = await build_kb(s)
     if s.get("photo"):
         try:
@@ -145,16 +220,33 @@ def chat_of(target):
     return target.message.chat.id if isinstance(target, CallbackQuery) else target.chat.id
 
 
+NAMES = {"at": 0.0, "data": {}}
+
+
+async def all_names():
+    if time.time() - NAMES["at"] > C.NAME_CACHE_SECONDS:
+        docs = await stories.find({}, {"name_lc": 1}).to_list()
+        NAMES["data"] = {str(d["_id"]): d["name_lc"] for d in docs}
+        NAMES["at"] = time.time()
+    return NAMES["data"]
+
+
+def invalidate_names():
+    NAMES["at"] = 0.0
+
+
 async def find_matches(q):
-    pattern = "".join(f"(?=.*{re.escape(w)})" for w in q.split())
-    res = await stories.find({"name_lc": {"$regex": "^" + pattern, "$options": "i"}}
-                             ).limit(C.MAX_MATCHES).to_list()
-    if res:
-        return res
-    names = await stories.find({}, {"name_lc": 1}).to_list()
-    close = difflib.get_close_matches(q, [n["name_lc"] for n in names], n=3,
-                                      cutoff=C.FUZZY_CUTOFF)
-    return await stories.find({"name_lc": {"$in": close}}).to_list() if close else []
+    """RapidFuzz se score ke hisab se best stories -> [(doc, score), ...]"""
+    names = await all_names()
+    if not names:
+        return []
+    hits = process.extract(q, names, scorer=fuzz.WRatio, limit=C.MAX_MATCHES,
+                           score_cutoff=C.FUZZY_SCORE_CUTOFF)
+    if not hits:
+        return []
+    ids = [oid(k) for _, _, k in hits]
+    docs = {str(d["_id"]): d async for d in stories.find({"_id": {"$in": ids}})}
+    return [(docs[k], score) for _, score, k in hits if k in docs]
 
 
 HOME_BACK = M([[B("🏠 Menu", callback_data="p:home")]])
@@ -249,10 +341,11 @@ async def search(_, m):
         if m.chat.type == ChatType.PRIVATE and C.REPLY_NOT_FOUND_IN_PRIVATE:
             await m.reply_text(C.NOT_FOUND_TEXT)
         return
-    exact = [s for s in res if s["name_lc"] == q]
-    if exact or len(res) == 1:
-        return await reply_story(m, (exact or res)[0])
-    kb = M([[B(s["name"][:60], callback_data=f"pk:{s['_id']}")] for s in res])
+    best, best_score = res[0]
+    if (len(res) == 1 or best["name_lc"] == q
+            or best_score - res[1][1] >= C.AUTO_PICK_GAP):
+        return await reply_story(m, best)
+    kb = M([[B(doc["name"][:60], callback_data=f"pk:{doc['_id']}")] for doc, _sc in res])
     await m.reply_text(C.PICK_TEXT, reply_markup=kb)
 
 
@@ -319,6 +412,7 @@ async def finish_add(target, uid):
             doc[key] = sch["default"]
     doc.update(name_lc=doc["name"].lower(), buttons=[], created=time.time())
     await stories.insert_one(doc)
+    invalidate_names()
     cid = chat_of(target)
     await app.send_message(cid, C.SAVED_TEXT)
     await send_story(cid, doc)
@@ -413,6 +507,7 @@ async def flow_input(_, m):
                 return await m.reply_text("⚠️ Ye naam pehle se kisi aur story ka hai.")
             upd["name_lc"] = val.lower()
         await stories.update_one({"_id": oid(sid)}, {"$set": upd})
+        invalidate_names()
         STATE.pop(uid, None)
         s = await get_story(sid)
         await m.reply_text("✅ Update ho gaya!\n\n" + card(s) + "\n\n<b>Aur kuch edit karna hai?</b>",
@@ -529,6 +624,7 @@ async def on_cb(_, cq):
 
     elif k == "dy":
         await stories.delete_one({"_id": s["_id"]})
+        invalidate_names()
         kb, total = await list_kb("d", 0)
         await show(cq, f"🗑 '<b>{esc(s['name'])}</b>' delete ho gayi.\n\nTotal: {total}", kb)
 

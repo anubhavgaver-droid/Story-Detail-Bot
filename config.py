@@ -28,7 +28,7 @@ MONGO_URI = _req("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME", "storybot")
 
 # ───────────── Default buttons (sirf pehli baar DB me seed hote hain) ─────────────
-CHANNEL_NAME = os.getenv("CHANNEL_NAME", "Ac Botz")
+CHANNEL_NAME = os.getenv("CHANNEL_NAME", "Rk Officials")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")      # https://t.me/yourchannel
 DEV_NAME = os.getenv("DEV_NAME", "Developer")
 DEV_LINK = os.getenv("DEV_LINK", "")              # https://t.me/yourusername
@@ -37,11 +37,17 @@ DEV_LINK = os.getenv("DEV_LINK", "")              # https://t.me/yourusername
 PORT = int(os.getenv("PORT", "10000"))
 SELF_PING_SECONDS = 540          # 9 min: free service ko sone se bachane ke liye
 
-# ───────────── Search criteria ─────────────
+# ───────────── Search criteria (RapidFuzz) ─────────────
 MIN_QUERY_LEN = 3                # isse chhota text ignore hoga (group spam se bachne ke liye)
 MAX_MATCHES = 6                  # kitni stories ke button dikhane hain
-FUZZY_CUTOFF = 0.6               # spelling galti kitni chalegi (0.0 - 1.0)
+FUZZY_SCORE_CUTOFF = 70          # 0-100: isse kam score wali story match nahi hogi
+AUTO_PICK_GAP = 10               # top story dusri se itna aage ho to seedha bhej do, warna buttons
+NAME_CACHE_SECONDS = 30          # story ke naam memory me cache (DB baar-baar nahi padhna)
 REPLY_NOT_FOUND_IN_PRIVATE = True    # private chat me "nahi mili" bole; group me hamesha chup
+
+# ───────────── Rich Message (Telegram Bot API 10.1+) ─────────────
+RICH_MESSAGES = True             # True: story card rich format (table) me; fail ho to purana format
+RICH_TABLE_STRIPED = True        # table ki alternate rows ka shade
 
 # ───────────── Panel ─────────────
 PAGE_SIZE = 8                    # list me ek page par kitni stories
