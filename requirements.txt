@@ -1,0 +1,2 @@
+kurigram==2.2.26
+pymongo==4.20.0

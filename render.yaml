@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: story-details-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: MONGO_URI
+        sync: false
+      - key: OWNER_ID
+        sync: false
+      - key: CHANNEL_NAME
+        value: Rk Officials
+      - key: CHANNEL_LINK
+        sync: false
+      - key: DEV_NAME
+        value: Developer
+      - key: DEV_LINK
+        sync: false
