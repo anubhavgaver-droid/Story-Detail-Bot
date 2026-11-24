@@ -1,8 +1,7 @@
 """
 Story Details Bot + Admin Control Panel
 Library: Kurigram (pyrogram) + PyMongo Async + RapidFuzz  |  Story card: Telegram Rich Message
-Deploy: Render Web Service (free)
-Saari settings / story criteria: config.py
+Deploy: Render Web Service (free)   |   Saari settings / story criteria: config.py
 """
 import asyncio
 import html
@@ -24,7 +23,7 @@ from bson.errors import InvalidId                           # noqa: E402
 from pymongo import AsyncMongoClient                        # noqa: E402
 from rapidfuzz import fuzz, process                         # noqa: E402
 from pyrogram import Client, filters, idle                  # noqa: E402
-from pyrogram.enums import ChatType, ParseMode              # noqa: E402
+from pyrogram.enums import ChatAction, ChatType, ParseMode  # noqa: E402
 from pyrogram.errors import MessageNotModified              # noqa: E402
 from pyrogram.types import (CallbackQuery,                  # noqa: E402
                             InlineKeyboardButton as B,
@@ -70,24 +69,43 @@ def choice_items(sch):
     return list(ch.items()) if isinstance(ch, dict) else [(c, c) for c in ch]
 
 
-def card(s):
-    lines = [f"{S['name']['emoji']} <b>{esc(s['name'])}</b>\n"]
+def status_icon(st):
+    return {C.STATUS_COMPLETED: "✅", C.STATUS_ONGOING: "🔥"}.get(st, "📌")
+
+
+def total_of(s):
+    t = s.get("total")
+    return int(t) if t is not None else int(s.get("regular", 0)) + int(s.get("extra", 0))
+
+
+def card_rows(s):
+    """[(emoji+label, value), ...]  config.CARD_ORDER ke hisab se"""
+    rows = []
     for key in C.CARD_ORDER:
-        if key == "@total":
-            total = int(s.get("regular", 0)) + int(s.get("extra", 0))
-            lines.append(f"{C.TOTAL_LABEL}: <b>{total}</b>")
-            continue
-        v = s.get(key)
+        v = total_of(s) if key == "total" else s.get(key)
         if v in (None, ""):
             continue
         sch = S[key]
         if sch["kind"] == "choice" and isinstance(sch["choices"], dict):
             v = sch["choices"].get(v, v)
-        lines.append(f"{sch['emoji']} {sch['label']}: <b>{esc(str(v))}</b>")
-    note = s.get(C.NOTE_KEY)
-    if note:
-        lines.append(f"\n{S[C.NOTE_KEY]['emoji']} {esc(note)}")
+        rows.append((f"{sch['emoji']} {sch['label']}", str(v)))
+    return rows
+
+
+def card(s):
+    lines = [f"{S['name']['emoji']} <b>{esc(s['name'])}</b>\n"]
+    lines += [f"{lbl}: <b>{esc(v)}</b>" for lbl, v in card_rows(s)]
+    if s.get(C.NOTE_KEY):
+        lines.append(f"\n{S[C.NOTE_KEY]['emoji']} {esc(s[C.NOTE_KEY])}")
     return "\n".join(lines)
+
+
+def hdr(title):
+    return f"<b>{title}</b>\n{C.DIVIDER}\n"
+
+
+def bar(i, n):
+    return "▰" * i + "▱" * (n - i)
 
 
 def norm_url(u):
@@ -99,6 +117,10 @@ def norm_url(u):
     if re.match(r"^https?://\S+\.\S+$", u) or re.match(r"^tg://\S+$", u):
         return u
     return None
+
+
+async def get_official():
+    return await settings.find_one({"_id": "official"})
 
 
 async def button_pairs(s=None):
@@ -120,25 +142,12 @@ def rich_card(s):
         parts.append('<img src="tg://photo?id=poster"/>')
     parts.append(f"<h2>{esc(s['name'])}</h2>")
     cell = 'align="left" valign="middle"'
-    rows = []
-    for key in C.CARD_ORDER:
-        if key == "@total":
-            total = int(s.get("regular", 0)) + int(s.get("extra", 0))
-            rows.append(f'<tr><th {cell}>{esc(C.TOTAL_LABEL)}</th><td {cell}><b>{total}</b></td></tr>')
-            continue
-        v = s.get(key)
-        if v in (None, ""):
-            continue
-        sch = S[key]
-        if sch["kind"] == "choice" and isinstance(sch["choices"], dict):
-            v = sch["choices"].get(v, v)
-        rows.append(f'<tr><th {cell}>{sch["emoji"]} {esc(sch["label"])}</th>'
-                    f'<td {cell}>{esc(str(v))}</td></tr>')
+    rows = [f'<tr><th {cell}>{esc(lbl)}</th><td {cell}>{esc(v)}</td></tr>'
+            for lbl, v in card_rows(s)]
     attrs = "bordered" + (" striped" if C.RICH_TABLE_STRIPED else "")
     parts.append(f"<table {attrs}>{''.join(rows)}</table>")
-    note = s.get(C.NOTE_KEY)
-    if note:
-        parts.append(f"<blockquote><p>{esc(note)}</p></blockquote>")
+    if s.get(C.NOTE_KEY):
+        parts.append(f"<blockquote><p>{esc(s[C.NOTE_KEY])}</p></blockquote>")
     return "".join(parts)
 
 
@@ -200,6 +209,17 @@ async def reply_story(m, s):
     await m.reply_text(card(s), reply_markup=kb)
 
 
+async def typing(chat_id):
+    """Bot ke naam ke neeche 'typing...' dikhata hai"""
+    if not C.TYPING_ENABLED:
+        return
+    try:
+        await app.send_chat_action(chat_id, ChatAction.TYPING)
+        await asyncio.sleep(C.TYPING_SECONDS)
+    except Exception:
+        pass
+
+
 async def show(cq, text, kb=None):
     try:
         await cq.message.edit_text(text, reply_markup=kb)
@@ -220,6 +240,7 @@ def chat_of(target):
     return target.message.chat.id if isinstance(target, CallbackQuery) else target.chat.id
 
 
+# ───────────── search (RapidFuzz) ─────────────
 NAMES = {"at": 0.0, "data": {}}
 
 
@@ -249,17 +270,40 @@ async def find_matches(q):
     return [(docs[k], score) for _, score, k in hits if k in docs]
 
 
+# ───────────── panel keyboards / texts ─────────────
 HOME_BACK = M([[B("🏠 Menu", callback_data="p:home")]])
+CANCEL_KB = M([[B("🚫 Cancel", callback_data="cancel")]])
+
+
+async def home_text():
+    tot = await stories.count_documents({})
+    on = await stories.count_documents({"status": C.STATUS_ONGOING})
+    done = await stories.count_documents({"status": C.STATUS_COMPLETED})
+    return (hdr("🛠  CONTROL PANEL") +
+            f"📚 Stories: <b>{tot}</b>\n🔥 Ongoing: <b>{on}</b>   ✅ Completed: <b>{done}</b>\n"
+            f"{C.DIVIDER}\nNeeche se option chuno 👇")
 
 
 def home_kb():
     return M([
         [B("➕ Add Story", callback_data="p:add"), B("✏️ Edit Story", callback_data="ls:e:0")],
         [B("🗑 Delete Story", callback_data="ls:d:0"), B("📋 All Stories", callback_data="ls:v:0")],
+        [B("🔘 Global Buttons", callback_data="p:gb"), B("🏠 Official Group", callback_data="p:og")],
         [B("📊 Stats", callback_data="p:stats"), B("👥 Admins", callback_data="p:admins")],
-        [B("🔘 Global Buttons", callback_data="p:gb")],
         [B("❌ Close", callback_data="p:close")],
     ])
+
+
+def choice_rows(sch, cb, custom_cb):
+    btns = [B(lbl, callback_data=cb(val)) for val, lbl in choice_items(sch)]
+    rows = [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    if sch.get("allow_custom"):
+        rows.append([B("✍️ Custom", callback_data=custom_cb)])
+    return rows
+
+
+def edit_text(s):
+    return hdr("✏️  EDIT STORY") + card(s) + "\n\n<b>Kya edit karna hai?</b>"
 
 
 def edit_kb(sid):
@@ -288,8 +332,8 @@ async def list_kb(mode, page):
     cur = stories.find({}, {"name": 1, "status": 1}).sort("name_lc", 1) \
                  .skip(page * C.PAGE_SIZE).limit(C.PAGE_SIZE)
     async for s in cur:
-        icon = "✅" if s.get("status") == C.STATUS_COMPLETED else "🔥"
-        rows.append([B(f"{icon} {s['name']}"[:60], callback_data=f"{mode}i:{s['_id']}")])
+        rows.append([B(f"{status_icon(s.get('status'))} {s['name']}"[:60],
+                       callback_data=f"{mode}i:{s['_id']}")])
     nav = []
     if page > 0:
         nav.append(B("⬅️ Prev", callback_data=f"ls:{mode}:{page-1}"))
@@ -306,8 +350,9 @@ async def gb_view(cq):
     rows = [[B(f"🗑 {x['label']}"[:40], callback_data=f"gbd:{x['_id']}")] for x in btns]
     rows.append([B("➕ Add Button", callback_data="gb:add")])
     rows.append([B("🏠 Menu", callback_data="p:home")])
-    await show(cq, "🔘 <b>Global Buttons</b>\n(har story ke neeche dikhte hain)\n\n"
-                   "Delete karne ke liye button par tap karo.", M(rows))
+    await show(cq, hdr("🔘  GLOBAL BUTTONS") +
+               "Ye buttons <b>har story</b> ke neeche dikhte hain.\n"
+               f"Abhi: <b>{len(btns)}</b>\n\nDelete karne ke liye button par tap karo.", M(rows))
 
 
 async def sb_view(cq, s):
@@ -316,16 +361,42 @@ async def sb_view(cq, s):
             for i, x in enumerate(s.get("buttons", []))]
     rows.append([B("➕ Add Button", callback_data=f"sba:{sid}")])
     rows.append([B("⬅️ Back", callback_data=f"ei:{sid}")])
-    await show(cq, f"🔘 <b>{esc(s['name'])}</b> ke buttons\n(sirf is story ke neeche dikhte hain)"
-                   "\n\nDelete karne ke liye tap karo.", M(rows))
+    await show(cq, hdr("🔘  STORY BUTTONS") + f"📖 <b>{esc(s['name'])}</b>\n"
+               "Ye buttons sirf is story ke neeche dikhte hain.\n\n"
+               "Delete karne ke liye tap karo.", M(rows))
+
+
+async def og_view(cq):
+    og = await get_official()
+    if og:
+        txt = (hdr("🏠  OFFICIAL GROUP") + f"Button: <b>{esc(og['label'])}</b>\n"
+               f"Link: {esc(og['url'])}\n\nNormal users ko PM me ye button dikhta hai.")
+        rows = [[B("✏️ Change", callback_data="og:set"), B("🗑 Remove", callback_data="og:del")]]
+    else:
+        txt = (hdr("🏠  OFFICIAL GROUP") + "Abhi koi official group set nahi hai.\n\n"
+               "Normal users PM me search nahi kar sakte; unhe ye group dikhaya jata hai.")
+        rows = [[B("➕ Set Official Group", callback_data="og:set")]]
+    rows.append([B("🏠 Menu", callback_data="p:home")])
+    await show(cq, txt, M(rows))
 
 
 # ───────────── public: start + search ─────────────
+async def pm_user_reply(m):
+    """PM me normal user: search nahi, sirf Official Group dikhao"""
+    rows = []
+    og = await get_official()
+    if og:
+        rows.append([B(og["label"], url=og["url"])])
+    rows += [[B(label, url=url)] for label, url in await button_pairs()]
+    await m.reply_text(C.PM_USER_TEXT, reply_markup=M(rows) if rows else None)
+
+
 @app.on_message(filters.command("start"))
 async def start(_, m):
-    txt = C.WELCOME_TEXT
-    if m.from_user and await is_admin(m.from_user.id):
-        txt += "\n\n🛠 Admin: /panel"
+    adm = bool(m.from_user) and await is_admin(m.from_user.id)
+    if m.chat.type == ChatType.PRIVATE and not adm:
+        return await pm_user_reply(m)
+    txt = C.WELCOME_TEXT + ("\n\n🛠 Admin: /panel" if adm else "")
     await m.reply_text(txt, reply_markup=await build_kb())
 
 
@@ -333,14 +404,18 @@ async def start(_, m):
 async def search(_, m):
     if not m.from_user or m.from_user.is_bot:
         return
+    private = m.chat.type == ChatType.PRIVATE
+    if private and not await is_admin(m.from_user.id):
+        return await pm_user_reply(m)
     q = m.text.strip().lower()
     if len(q) < C.MIN_QUERY_LEN:
         return
     res = await find_matches(q)
     if not res:
-        if m.chat.type == ChatType.PRIVATE and C.REPLY_NOT_FOUND_IN_PRIVATE:
+        if private and C.REPLY_NOT_FOUND_IN_PRIVATE:
             await m.reply_text(C.NOT_FOUND_TEXT)
         return
+    await typing(m.chat.id)
     best, best_score = res[0]
     if (len(res) == 1 or best["name_lc"] == q
             or best_score - res[1][1] >= C.AUTO_PICK_GAP):
@@ -357,7 +432,7 @@ async def panel(_, m):
     if m.chat.type != ChatType.PRIVATE:
         return await m.reply_text("🔒 Panel sirf bot ke private chat me khulta hai.")
     STATE.pop(m.from_user.id, None)
-    await m.reply_text(C.HOME_TEXT, reply_markup=home_kb())
+    await m.reply_text(await home_text(), reply_markup=home_kb())
 
 
 @app.on_message(filters.command(["addadmin", "rmadmin"]))
@@ -377,18 +452,21 @@ async def manage_admin(_, m):
 
 
 # ───────────── add-story flow (config.ADD_STEPS se chalta hai) ─────────────
+def add_head(st):
+    n = len(C.ADD_STEPS)
+    return hdr("➕  ADD STORY") + f"{bar(st['i'] + 1, n)}  <b>{st['i'] + 1}/{n}</b>\n\n"
+
+
 async def ask_step(target, uid):
     st = STATE[uid]
     key = C.ADD_STEPS[st["i"]]
     sch = S[key]
-    text = (f"➕ <b>Add Story</b>  ({st['i']+1}/{len(C.ADD_STEPS)})\n\n"
-            f"{sch['emoji']} <b>{sch['label']}</b> — {sch['prompt']}")
+    text = add_head(st) + f"{sch['emoji']} <b>{sch['label']}</b>\n{sch['prompt']}"
     rows = []
     if sch["kind"] == "choice":
-        btns = [B(lbl, callback_data=f"af:{key}:{val}") for val, lbl in choice_items(sch)]
-        rows += [btns[i:i + 2] for i in range(0, len(btns), 2)]
+        rows += choice_rows(sch, lambda v: f"af:{key}:{v}", "af:custom")
     if not sch.get("required"):
-        text += "\n\n(Chhodne ke liye /skip ya Skip button)"
+        text += "\n\n<i>Chhodne ke liye /skip ya Skip button</i>"
         rows.append([B("⏭ Skip", callback_data="af:skip")])
     rows.append([B("🚫 Cancel", callback_data="cancel")])
     await respond(target, text, M(rows))
@@ -416,7 +494,7 @@ async def finish_add(target, uid):
     cid = chat_of(target)
     await app.send_message(cid, C.SAVED_TEXT)
     await send_story(cid, doc)
-    await app.send_message(cid, C.HOME_TEXT, reply_markup=home_kb())
+    await app.send_message(cid, await home_text(), reply_markup=home_kb())
 
 
 async def parse_value(key, m, txt, clearing=False):
@@ -435,10 +513,12 @@ async def parse_value(key, m, txt, clearing=False):
         if txt.isdigit():
             return True, int(txt), None
         return False, None, "Sirf number bhejo (jaise 25)."
-    if kind == "choice" and not sch.get("allow_custom"):
+    if kind == "choice":
         for val, lbl in choice_items(sch):
             if txt.lower() in (val.lower(), lbl.lower()):
                 return True, val, None
+        if sch.get("allow_custom"):
+            return True, txt[:40], None
         return False, None, "Button se chuno."
     return True, txt, None
 
@@ -452,7 +532,7 @@ async def flow_input(_, m):
 
     if low == "/cancel":
         STATE.pop(uid, None)
-        return await m.reply_text(C.HOME_TEXT, reply_markup=home_kb())
+        return await m.reply_text(await home_text(), reply_markup=home_kb())
 
     mode = st["mode"]
 
@@ -464,12 +544,17 @@ async def flow_input(_, m):
             st["step"] = "url"
             return await m.reply_text(
                 "Ab button ka <b>link</b> bhejo\n(https://... ya @username ya t.me/...):",
-                reply_markup=M([[B("🚫 Cancel", callback_data="cancel")]]))
+                reply_markup=CANCEL_KB)
         url = norm_url(txt)
         if not url:
             return await m.reply_text("❌ Sahi link bhejo (https://... ya @username):")
         STATE.pop(uid, None)
         item = {"label": st["label"], "url": url}
+        if st["scope"] == "official":
+            await settings.update_one({"_id": "official"}, {"$set": item}, upsert=True)
+            return await m.reply_text("✅ Official Group set ho gaya!", reply_markup=M([
+                [B("🏠 Official Group", callback_data="p:og")],
+                [B("🏠 Menu", callback_data="p:home")]]))
         if st["scope"] == "global":
             await buttons.insert_one({**item, "order": time.time()})
             kb = M([[B("🔘 Global Buttons", callback_data="p:gb")],
@@ -510,12 +595,12 @@ async def flow_input(_, m):
         invalidate_names()
         STATE.pop(uid, None)
         s = await get_story(sid)
-        await m.reply_text("✅ Update ho gaya!\n\n" + card(s) + "\n\n<b>Aur kuch edit karna hai?</b>",
-                           reply_markup=edit_kb(sid))
+        await m.reply_text("✅ <b>Update ho gaya!</b>\n\n" + edit_text(s), reply_markup=edit_kb(sid))
 
 
 # ───────────── callbacks ─────────────
-STORY_CB = {"ei", "vi", "di", "dy", "sb", "sbd", "sba", "ed", "ev"}
+STORY_CB = {"ei", "vi", "di", "dy", "sb", "sbd", "sba", "ed", "ev", "ec"}
+BTN_PROMPT = "🔘 <b>Button ka naam</b> bhejo\n(jaise: 💬 Contact, 💰 Buy Now):"
 
 
 @app.on_callback_query()
@@ -531,6 +616,7 @@ async def on_cb(_, cq):
         if not s:
             return await show(cq, "Story ab available nahi hai.")
         await cq.message.delete()
+        await typing(cq.message.chat.id)
         return await send_story(cq.message.chat.id, s)
 
     if not await is_admin(uid):
@@ -539,7 +625,7 @@ async def on_cb(_, cq):
 
     if d in ("cancel", "p:home"):
         STATE.pop(uid, None)
-        return await show(cq, C.HOME_TEXT, home_kb())
+        return await show(cq, await home_text(), home_kb())
 
     if d == "p:close":
         return await cq.message.delete()
@@ -551,31 +637,45 @@ async def on_cb(_, cq):
     if d == "p:stats":
         tot = await stories.count_documents({})
         on = await stories.count_documents({"status": C.STATUS_ONGOING})
-        cur = await stories.aggregate([{"$group": {
-            "_id": None, "r": {"$sum": "$regular"}, "e": {"$sum": "$extra"}}}])
+        done = await stories.count_documents({"status": C.STATUS_COMPLETED})
+        cur = await stories.aggregate([{"$group": {"_id": None, "t": {"$sum": {"$ifNull": [
+            "$total", {"$add": [{"$ifNull": ["$regular", 0]}, {"$ifNull": ["$extra", 0]}]}]}},
+            "r": {"$sum": {"$ifNull": ["$regular", 0]}}, "e": {"$sum": {"$ifNull": ["$extra", 0]}}}}])
         agg = await cur.to_list()
-        r, e = (agg[0]["r"], agg[0]["e"]) if agg else (0, 0)
+        t, r, e = (agg[0]["t"], agg[0]["r"], agg[0]["e"]) if agg else (0, 0, 0)
         n_adm = await admins.count_documents({})
         return await show(cq, (
-            f"📊 <b>Stats</b>\n\n📚 Total stories: <b>{tot}</b>\n"
-            f"🔥 Ongoing: <b>{on}</b>\n✅ Completed: <b>{tot-on}</b>\n"
-            f"🎬 Total episodes: <b>{r+e}</b> (Regular {r} + Extra {e})\n"
-            f"👥 Admins: <b>{n_adm+1}</b>"), HOME_BACK)
+            hdr("📊  STATS") +
+            f"📚 Total stories: <b>{tot}</b>\n🔥 Ongoing: <b>{on}</b>\n"
+            f"✅ Completed: <b>{done}</b>\n📌 Other: <b>{tot-on-done}</b>\n{C.DIVIDER}\n"
+            f"🎬 Total episodes: <b>{t}</b>\n📊 Regular: <b>{r}</b>   💡 Extra: <b>{e}</b>\n"
+            f"{C.DIVIDER}\n👥 Admins: <b>{n_adm+1}</b>"), HOME_BACK)
 
     if d == "p:admins":
         ids = [str(a["_id"]) async for a in admins.find({})]
         return await show(cq, (
-            f"👥 <b>Admins</b>\n\nOwner: <code>{C.OWNER_ID}</code>\n"
-            f"Admins: {', '.join(ids) if ids else 'koi nahi'}\n\n"
+            hdr("👥  ADMINS") + f"👑 Owner: <code>{C.OWNER_ID}</code>\n"
+            f"🛡 Admins: {', '.join(ids) if ids else 'koi nahi'}\n\n"
             "Owner commands:\n/addadmin user_id\n/rmadmin user_id"), HOME_BACK)
 
     if d == "p:gb":
         return await gb_view(cq)
 
+    if d == "p:og":
+        return await og_view(cq)
+
+    if d == "og:set":
+        STATE[uid] = {"mode": "btn", "scope": "official", "step": "label"}
+        return await show(cq, hdr("🏠  OFFICIAL GROUP") +
+                          "Button ka <b>naam</b> bhejo (jaise: 👥 Official Group):", CANCEL_KB)
+
+    if d == "og:del":
+        await settings.delete_one({"_id": "official"})
+        return await og_view(cq)
+
     if d == "gb:add":
         STATE[uid] = {"mode": "btn", "scope": "global", "step": "label"}
-        return await show(cq, "🔘 <b>Button ka naam</b> bhejo\n(jaise: 💬 Contact, 💰 Buy Now):",
-                          M([[B("🚫 Cancel", callback_data="cancel")]]))
+        return await show(cq, BTN_PROMPT, CANCEL_KB)
 
     if k == "gbd":
         i = oid(p[1])
@@ -586,14 +686,17 @@ async def on_cb(_, cq):
     if k == "ls":
         mode, page = p[1], int(p[2])
         kb, total = await list_kb(mode, page)
-        title = {"e": "✏️ Edit", "d": "🗑 Delete", "v": "📋 All Stories"}[mode]
-        return await show(cq, f"<b>{title}</b>  (total {total})\nStory chuno 👇", kb)
+        title = {"e": "✏️  EDIT STORY", "d": "🗑  DELETE STORY", "v": "📋  ALL STORIES"}[mode]
+        return await show(cq, hdr(title) + f"Total: <b>{total}</b>\nStory chuno 👇", kb)
 
     if k == "af":                                    # add-flow ke buttons
         st = STATE.get(uid)
         if not st or st["mode"] != "add":
             return
         key = C.ADD_STEPS[st["i"]]
+        if p[1] == "custom":
+            return await show(cq, add_head(st) + f"✍️ <b>Custom {S[key]['label']}</b>\n"
+                              "Apni value type karke bhejo:", CANCEL_KB)
         if p[1] == "skip":
             if S[key].get("required"):
                 return
@@ -612,41 +715,48 @@ async def on_cb(_, cq):
     sid = str(s["_id"])
 
     if k == "ei":
-        await show(cq, card(s) + "\n\n<b>Kya edit karna hai?</b>", edit_kb(sid))
+        await show(cq, edit_text(s), edit_kb(sid))
 
     elif k == "vi":
         await send_story(cq.message.chat.id, s)
 
     elif k == "di":
-        await show(cq, card(s) + "\n\n⚠️ <b>Pakka delete karna hai?</b>", M([[
-            B("✅ Haan, delete", callback_data=f"dy:{sid}"),
-            B("❌ Nahi", callback_data="ls:d:0")]]))
+        await show(cq, hdr("🗑  DELETE STORY") + card(s) + "\n\n⚠️ <b>Pakka delete karna hai?</b>",
+                   M([[B("✅ Haan, delete", callback_data=f"dy:{sid}"),
+                       B("❌ Nahi", callback_data="ls:d:0")]]))
 
     elif k == "dy":
         await stories.delete_one({"_id": s["_id"]})
         invalidate_names()
         kb, total = await list_kb("d", 0)
-        await show(cq, f"🗑 '<b>{esc(s['name'])}</b>' delete ho gayi.\n\nTotal: {total}", kb)
+        await show(cq, hdr("🗑  DELETE STORY") +
+                   f"✅ '<b>{esc(s['name'])}</b>' delete ho gayi.\n\nTotal: <b>{total}</b>", kb)
 
     elif k == "ev":                                  # choice field ki value seedhe set
         key, val = p[2], d.split(":", 3)[3]
         await stories.update_one({"_id": s["_id"]}, {"$set": {key: val}})
         s[key] = val
         STATE.pop(uid, None)
-        await show(cq, card(s) + "\n\n<b>Kya edit karna hai?</b>", edit_kb(sid))
+        await show(cq, edit_text(s), edit_kb(sid))
 
-    elif k == "ed":                                  # text/number/photo field edit
+    elif k == "ed":                                  # field edit
         key = p[2]
         sch = S[key]
         rows = []
         if sch["kind"] == "choice":
-            btns = [B(lbl, callback_data=f"ev:{sid}:{key}:{val}") for val, lbl in choice_items(sch)]
-            rows += [btns[i:i + 2] for i in range(0, len(btns), 2)]
+            rows += choice_rows(sch, lambda v: f"ev:{sid}:{key}:{v}", f"ec:{sid}:{key}")
         if sch["kind"] != "choice" or sch.get("allow_custom"):
             STATE[uid] = {"mode": "edit", "sid": sid, "key": key}
-        hint = "\nHatane ke liye <code>-</code> bhejo." if not sch.get("required") else ""
+        hint = "\n\n<i>Hatane ke liye <code>-</code> bhejo.</i>" if not sch.get("required") else ""
         rows.append([B("🚫 Cancel", callback_data="cancel")])
-        await show(cq, f"✏️ {sch['emoji']} <b>{sch['label']}</b> — {sch['prompt']}{hint}", M(rows))
+        await show(cq, hdr("✏️  EDIT") + f"{sch['emoji']} <b>{sch['label']}</b>\n"
+                   f"{sch['prompt']}{hint}", M(rows))
+
+    elif k == "ec":                                  # custom value type karni hai
+        key = p[2]
+        STATE[uid] = {"mode": "edit", "sid": sid, "key": key}
+        await show(cq, hdr("✏️  CUSTOM") + f"{S[key]['emoji']} <b>{S[key]['label']}</b>\n"
+                   "Apni value type karke bhejo:", CANCEL_KB)
 
     elif k == "sb":
         await sb_view(cq, s)
@@ -662,8 +772,7 @@ async def on_cb(_, cq):
 
     elif k == "sba":
         STATE[uid] = {"mode": "btn", "scope": sid, "step": "label"}
-        await show(cq, "🔘 <b>Button ka naam</b> bhejo\n(jaise: 💬 Contact, 💰 Buy Now):",
-                   M([[B("🚫 Cancel", callback_data="cancel")]]))
+        await show(cq, BTN_PROMPT, CANCEL_KB)
 
 
 # ───────────── Render keep-alive web server ─────────────
@@ -707,6 +816,9 @@ async def main():
             await buttons.insert_one({"label": f"👨‍💻 {C.DEV_NAME}",
                                       "url": C.DEV_LINK, "order": t + 1})
         await settings.insert_one({"_id": "seeded"})
+    if C.OFFICIAL_GROUP_LINK and not await get_official():
+        await settings.insert_one({"_id": "official", "label": C.OFFICIAL_GROUP_NAME,
+                                   "url": C.OFFICIAL_GROUP_LINK})
     await app.start()
     me = await app.get_me()
     log.info("Bot started: @%s", me.username)

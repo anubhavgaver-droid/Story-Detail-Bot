@@ -7,6 +7,7 @@ Render me ye Environment Variables set karo:
     MONGO_URI               -> MongoDB Atlas connection string
     OWNER_ID                -> tumhari Telegram numeric id
     CHANNEL_NAME, CHANNEL_LINK, DEV_NAME, DEV_LINK   (optional, pehli baar buttons banane ke liye)
+    OFFICIAL_GROUP_NAME, OFFICIAL_GROUP_LINK         (optional; panel se bhi set/change hota hai)
 """
 import os
 
@@ -32,6 +33,8 @@ CHANNEL_NAME = os.getenv("CHANNEL_NAME", "Rk Officials")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")      # https://t.me/yourchannel
 DEV_NAME = os.getenv("DEV_NAME", "Developer")
 DEV_LINK = os.getenv("DEV_LINK", "")              # https://t.me/yourusername
+OFFICIAL_GROUP_NAME = os.getenv("OFFICIAL_GROUP_NAME", "👥 Official Group")
+OFFICIAL_GROUP_LINK = os.getenv("OFFICIAL_GROUP_LINK", "")   # normal users ko PM me ye dikhega
 
 # ───────────── Render web service (free tier) ─────────────
 PORT = int(os.getenv("PORT", "10000"))
@@ -43,7 +46,12 @@ MAX_MATCHES = 6                  # kitni stories ke button dikhane hain
 FUZZY_SCORE_CUTOFF = 70          # 0-100: isse kam score wali story match nahi hogi
 AUTO_PICK_GAP = 10               # top story dusri se itna aage ho to seedha bhej do, warna buttons
 NAME_CACHE_SECONDS = 30          # story ke naam memory me cache (DB baar-baar nahi padhna)
-REPLY_NOT_FOUND_IN_PRIVATE = True    # private chat me "nahi mili" bole; group me hamesha chup
+REPLY_NOT_FOUND_IN_PRIVATE = True    # owner/admin ke PM me "nahi mili" bole; group me hamesha chup
+# PM me search sirf OWNER + ADMINS ke liye hai. Normal user ko PM_USER_TEXT + Official Group button milta hai.
+
+# ───────────── Typing animation (story milne par bot ke naam ke neeche "typing...") ─────────────
+TYPING_ENABLED = True
+TYPING_SECONDS = 1.5             # kitni der typing dikhe, phir story bheje
 
 # ───────────── Rich Message (Telegram Bot API 10.1+) ─────────────
 RICH_MESSAGES = True             # True: story card rich format (table) me; fail ho to purana format
@@ -51,6 +59,7 @@ RICH_TABLE_STRIPED = True        # table ki alternate rows ka shade
 
 # ───────────── Panel ─────────────
 PAGE_SIZE = 8                    # list me ek page par kitni stories
+DIVIDER = "━━━━━━━━━━━━━━━━"
 
 # ───────────── Story ke criteria (kya-kya fields hote hain) ─────────────
 STATUS_ONGOING = "ongoing"
@@ -69,11 +78,13 @@ STORY_SCHEMA = {
                      prompt="Language chuno ya type karo"),
     "status":   dict(emoji="📡", label="Status", kind="choice", required=True,
                      choices={STATUS_ONGOING: "🔥 Ongoing", STATUS_COMPLETED: "✅ Completed"},
-                     prompt="Story ka status chuno"),
+                     allow_custom=True, prompt="Story ka status chuno ya custom likho"),
     "regular":  dict(emoji="📊", label="Regular Episodes", kind="number", required=True,
                      prompt="Regular episodes kitne hain? (number)"),
     "extra":    dict(emoji="💡", label="Extra Episodes", kind="number", required=True,
                      prompt="Extra episodes kitne hain? (0 bhi chalega)"),
+    "total":    dict(emoji="📚", label="Total Episodes", kind="number", required=False,
+                     prompt="Total episodes bhejo (khali = Regular + Extra apne-aap jodta hai)"),
     "price":    dict(emoji="💰", label="Price", kind="text", required=False,
                      prompt="Price bhejo (jaise ₹99)"),
     "note":     dict(emoji="📝", label="Note", kind="text", required=False,
@@ -84,17 +95,19 @@ STORY_SCHEMA = {
 ADD_STEPS = ["name", "photo", "language", "status", "regular", "extra", "price"]
 
 # Edit menu me kaun-kaun se fields badal sakte hain
-EDIT_FIELDS = ["name", "photo", "language", "status", "regular", "extra", "price", "note"]
+EDIT_FIELDS = ["name", "photo", "language", "status", "regular", "extra", "total", "price", "note"]
 
-# Story card me kya aur kis order me dikhana hai ("@total" = regular + extra)
-CARD_ORDER = ["language", "status", "regular", "extra", "@total", "price"]
-TOTAL_LABEL = "📚 Total Episodes"
+# Story card me kya aur kis order me dikhana hai
+# "total": agar admin ne total set kiya hai to wahi, warna regular + extra
+CARD_ORDER = ["language", "status", "regular", "extra", "total", "price"]
 NOTE_KEY = "note"                # card ke sabse neeche alag se dikhta hai
 
 # ───────────── Texts ─────────────
 WELCOME_TEXT = ("👋 <b>Story Details Bot</b>\n\n"
                 "Kisi bhi story ka naam type karo, main uski poori details bhej dunga.")
-HOME_TEXT = "🛠 <b>Control Panel</b>\n\nKya karna hai?"
+PM_USER_TEXT = ("🔒 <b>Story search yahan available nahi hai.</b>\n\n"
+                "Story ki details paane ke liye hamare <b>Official Group</b> me aao "
+                "aur wahan story ka naam type karo 👇")
 NOT_FOUND_TEXT = "😕 Story nahi mili. Naam check karke dobara likho."
 PICK_TEXT = "🔎 Kaun si story chahiye?"
 SAVED_TEXT = ("✅ <b>Story save ho gayi!</b>\n\n"

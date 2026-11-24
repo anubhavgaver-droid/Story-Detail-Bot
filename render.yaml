@@ -24,3 +24,7 @@ services:
         value: Developer
       - key: DEV_LINK
         sync: false
+      - key: OFFICIAL_GROUP_NAME
+        value: "👥 Official Group"
+      - key: OFFICIAL_GROUP_LINK
+        sync: false
