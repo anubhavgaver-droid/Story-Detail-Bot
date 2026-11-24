@@ -28,7 +28,7 @@ MONGO_URI = _req("MONGO_URI")
 DB_NAME = os.getenv("DB_NAME", "storybot")
 
 # ───────────── Default buttons (sirf pehli baar DB me seed hote hain) ─────────────
-CHANNEL_NAME = os.getenv("CHANNEL_NAME", "Rk Officials")
+CHANNEL_NAME = os.getenv("CHANNEL_NAME", "Ac Botz")
 CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")      # https://t.me/yourchannel
 DEV_NAME = os.getenv("DEV_NAME", "Developer")
 DEV_LINK = os.getenv("DEV_LINK", "")              # https://t.me/yourusername
