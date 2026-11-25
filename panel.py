@@ -2,6 +2,7 @@
 from core import *  # noqa: F401,F403
 from search import invalidate_names
 from vault import vault_view
+from wishlist import clear_request
 
 
 # ───────────── panel keyboards / texts ─────────────
@@ -25,7 +26,7 @@ def home_kb():
         [B("📡 Channels", callback_data="ls:c:0"), B("📥 Story Vault", callback_data="p:vault")],
         [B("🔘 Global Buttons", callback_data="p:gb"), B("🏠 Official Group", callback_data="p:og")],
         [B("📊 Stats", callback_data="p:stats"), B("👥 Admins", callback_data="p:admins")],
-        [B("❌ Close", callback_data="p:close")],
+        [B("📬 Requests", callback_data="rq:v"), B("❌ Close", callback_data="p:close")],
     ])
 
 
@@ -186,6 +187,7 @@ async def finish_add(target, uid):
     doc.update(name_lc=doc["name"].lower(), buttons=[], created=time.time())
     await stories.insert_one(doc)
     invalidate_names()
+    await clear_request(doc["name_lc"])
     cid = chat_of(target)
     await app.send_message(cid, C.SAVED_TEXT)
     await send_story(cid, doc)
@@ -298,7 +300,7 @@ STORY_CB = {"ei", "vi", "di", "dy", "sb", "sbd", "sba", "ed", "ev", "ec", "ci", 
 BTN_PROMPT = "🔘 <b>Button ka naam</b> bhejo\n(jaise: 💬 Contact, 💰 Buy Now):"
 
 
-@app.on_callback_query(~filters.regex(r"^ch:"))
+@app.on_callback_query(~filters.regex(r"^(ch|rq):"))
 async def on_cb(_, cq):
     d = cq.data or ""
     p = d.split(":")

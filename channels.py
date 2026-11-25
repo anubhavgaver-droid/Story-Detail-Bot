@@ -4,9 +4,59 @@ import time
 from core import *  # noqa: F401,F403
 from search import all_names, invalidate_names
 from episodes import extract_episode, extract_extra, parse_setvault
+from wishlist import clear_request
 
 MEDIA = ("audio", "video", "document", "voice", "video_note", "animation")
 _ME = {}
+
+
+def has_media(m):
+    return any(getattr(m, a, None) for a in MEDIA)
+
+
+def msg_episode(m, story, txt):
+    """post ka episode number: pehle caption, phir audio title, phir file name"""
+    def attr(obj, name):
+        o = getattr(m, obj, None)
+        return getattr(o, name, None) if o else None
+
+    title = attr("audio", "title")
+    fname = attr("audio", "file_name") or attr("video", "file_name") or attr("document", "file_name")
+    chat_title = getattr(getattr(m, "chat", None), "title", None) or ""
+    return extract_episode([txt, title, fname], [story["name"], chat_title])
+
+
+async def bootstrap(chat_id, last_id, story):
+    """/setvault post ke theek pehle ke chand LATEST messages dekhkar episode / extra count nikalta hai.
+    Poora channel nahi padhta. Bot ko ye access na mile to chup-chaap chhod deta hai."""
+    ids = list(range(max(1, last_id - C.BOOTSTRAP_SCAN), last_id))
+    if not ids:
+        return
+    try:
+        msgs = await app.get_messages(chat_id, ids)
+    except Exception as e:
+        log.info("bootstrap skip: %s", e)
+        return
+    msgs = msgs if isinstance(msgs, list) else [msgs]
+    best, extra = 0, None
+    for mm in sorted((x for x in msgs if x and not getattr(x, "empty", False)),
+                     key=lambda x: x.id, reverse=True):
+        txt = (mm.caption or mm.text or "").strip()
+        ex = extract_extra(txt) if txt else None
+        if ex is not None:
+            extra = ex if extra is None else extra
+        elif has_media(mm):
+            ep = msg_episode(mm, story, txt)
+            if ep and ep > best:
+                best = ep
+    upd = {}
+    if best > story.get("regular", 0):
+        upd["regular"] = best
+    if extra is not None and not story.get("extra"):
+        upd["extra"] = extra
+    if upd:
+        await stories.update_one({"_id": story["_id"]}, {"$set": upd})
+        story.update(upd)
 
 
 async def my_id():
@@ -57,6 +107,7 @@ async def link_story(chat_id, title, name, by, photo=None, regular=None, extra=N
                  "status": C.VAULT_DEFAULT_STATUS, "regular": 0, "extra": 0,
                  "buttons": [], "created": time.time(), **fields}
         await stories.insert_one(story)
+        await clear_request(name_lc)
     else:
         await stories.update_one({"_id": story["_id"]}, {"$set": fields})
         story.update(fields)
@@ -80,6 +131,9 @@ async def channel_post(_, m):
 
 
 async def on_setvault(m, cmd):
+    v = await settings.find_one({"_id": "vault"})
+    if v and v.get("chat_id") == m.chat.id:  # ye Database (Vault) channel hai, story channel nahi
+        return
     uid = await trusted_admin(m.chat.id)
     if uid is None:                          # ajnabi channel — chup-chaap ignore
         return
@@ -88,6 +142,8 @@ async def on_setvault(m, cmd):
     story, created = await link_story(m.chat.id, title, name, uid,
                                       m.photo.file_id if m.photo else None,
                                       cmd["regular"], cmd["extra"])
+    if cmd["regular"] is None:                   # count nahi bataya -> latest posts se khud nikalo
+        await bootstrap(m.chat.id, m.id, story)
     try:
         await m.delete()
     except Exception:
@@ -102,24 +158,19 @@ async def on_setvault(m, cmd):
 
 
 async def track_post(m, story, txt):
-    has_media = any(getattr(m, a, None) for a in MEDIA)
+    media = has_media(m)
 
     ex = extract_extra(txt) if txt else None
     if ex is not None:                       # "Extra Episodes available 5"
-        new = max(story.get("extra", 0), ex) if has_media else ex
+        new = max(story.get("extra", 0), ex) if media else ex
         if new != story.get("extra", 0):
             await stories.update_one({"_id": story["_id"]}, {"$set": {"extra": new}})
         return
 
-    if not has_media and not C.TRACK_TEXT_POSTS:
+    if not media and not C.TRACK_TEXT_POSTS:
         return                               # sirf audio/video/file posts episode maani jati hain
 
-    def attr(obj, name):
-        return getattr(getattr(m, obj, None), name, None) if getattr(m, obj, None) else None
-
-    title = attr("audio", "title")
-    fname = attr("audio", "file_name") or attr("video", "file_name") or attr("document", "file_name")
-    ep = extract_episode([txt, title, fname], [story["name"], m.chat.title or ""])
+    ep = msg_episode(m, story, txt)
     if not ep:
         return
     cur = story.get("regular", 0)

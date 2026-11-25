@@ -146,3 +146,15 @@ VAULT_FORMAT_HELP = (
 TRACK_TEXT_POSTS = False     # False: sirf audio/video/file posts episode maani jayengi (text announcements nahi)
 MAX_EP_JUMP = 50             # itne se bada jump mile to admin se poochhega (galat number se bachav)
 CHANNEL_MATCH_SCORE = 88     # bot Admin bante hi channel ke naam se story match (0-100)
+
+# ───────────── Channel: latest post se count (bootstrap) ─────────────
+BOOTSTRAP_SCAN = 30          # /setvault ke waqt channel ke aakhri itne messages dekhkar episode count nikalta hai
+
+# ───────────── Human touch (group me baat-cheet) ─────────────
+HUMAN_MODE = True            # False: bot sirf seedha search kare, baat-cheet nahi
+SUGGEST_COUNT = 3            # "koi achhi story suggest karo" par kitni stories
+SHORT_MAX = 150              # "choti story" = itne episode tak
+LONG_MIN = 500               # "lambi story" = itne episode se zyada
+REQUEST_NOTIFY_AT = (1, 3, 5, 10, 25, 50, 100)   # itne log maangein to owner ko PM jayega
+# baat-cheet ke jumle: phrases.py
+

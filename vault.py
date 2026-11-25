@@ -1,6 +1,7 @@
 """vault.py — ek private channel se auto import (caption format se stories)"""
 from core import *  # noqa: F401,F403
 from search import invalidate_names
+from wishlist import clear_request
 
 
 # ───────────── Story Vault: private channel se auto import ─────────────
@@ -137,6 +138,7 @@ async def vault_ingest(m):
         doc = {"language": C.VAULT_DEFAULT_LANGUAGE, "status": C.VAULT_DEFAULT_STATUS,
                "extra": 0, "buttons": [], "created": time.time(), **upd}
         await stories.insert_one(doc)
+        await clear_request(doc["name_lc"])
         note_report("added")
     invalidate_names()
 
@@ -148,6 +150,10 @@ async def vault_post(_, m):
     pend = await settings.find_one({"_id": "vault_pending"})
     if pend and txt == pend["code"]:                       # channel connect code
         if pend["exp"] > time.time():
+            if await stories.find_one({"channel_id": m.chat.id}):    # ye kisi story ka apna channel hai
+                await app.send_message(pend["uid"], "⚠️ Ye channel kisi story se juda hai, "
+                                       "Database channel ke liye alag channel use karo.")
+                return
             title = m.chat.title or "Channel"
             await settings.update_one({"_id": "vault"}, {"$set": {
                 "chat_id": m.chat.id, "title": title, "by": pend["uid"]}}, upsert=True)

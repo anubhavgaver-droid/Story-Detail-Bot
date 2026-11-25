@@ -4,6 +4,9 @@ bot.py — entry point. Sab handlers import hote hi register ho jate hain.
 Files:  config.py   settings + story criteria + texts
         core.py     client, MongoDB, helpers, story card (rich message)
         search.py   RapidFuzz search, /start, PM rules
+        human.py    group me insaan jaisa baat-cheet (suggest, request, greeting)
+        phrases.py  baat-cheet ke jumle
+        wishlist.py nahi mili stories ki requests
         panel.py    admin control panel
         vault.py    ek private channel se caption-format import
         channels.py har story ka channel: /setvault, episode + extra auto count
@@ -15,14 +18,15 @@ import threading
 import time
 
 import core                                    # sabse pehle (event loop + client)
-from core import C, app, buttons, get_official, idle, log, settings, stories
-import search, vault, panel, channels, export  # noqa: F401,E401  (handlers register)
+from core import C, app, buttons, db, get_official, idle, log, settings, stories
+import search, vault, panel, channels, export, wishlist  # noqa: F401,E401  (handlers register)
 from webserver import run_web, self_ping
 
 
 async def main():
     await stories.create_index("name_lc")
     await stories.create_index("channel_id", sparse=True)
+    await db.requests.create_index("name_lc", unique=True)
     if not await settings.find_one({"_id": "seeded"}):      # pehli baar default buttons
         t = time.time()
         if C.CHANNEL_LINK:

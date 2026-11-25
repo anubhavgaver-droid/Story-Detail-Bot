@@ -1,5 +1,6 @@
 """search.py — RapidFuzz search, /start, group + PM search handlers"""
 from core import *  # noqa: F401,F403
+import human
 
 
 # ───────────── search (RapidFuzz) ─────────────
@@ -62,12 +63,28 @@ async def search(_, m):
     if private and not await is_admin(m.from_user.id):
         return await pm_user_reply(m)
     q = m.text.strip().lower()
+    chatty = C.HUMAN_MODE and not private
+    addressed = False
+    if chatty:                                       # group: insaan jaisa baat-cheet
+        addressed = await human.is_addressed(m)
+        intent = human.detect_intent(q, addressed)
+        if intent == "suggest":
+            return await human.suggest(m, q)
+        if intent in ("greet", "thanks"):
+            return await human.small_talk(m, intent)
     if len(q) < C.MIN_QUERY_LEN:
         return
     res = await find_matches(q)
+    guess = q
+    if not res and chatty:                           # "bhai hero story chahiye" -> "bhai hero"
+        guess = human.strip_cues(q)
+        if guess and guess != q and len(guess) >= C.MIN_QUERY_LEN:
+            res = await find_matches(guess)
     if not res:
         if private and C.REPLY_NOT_FOUND_IN_PRIVATE:
             await m.reply_text(C.NOT_FOUND_TEXT)
+        elif chatty and human.looks_like_request(q, addressed):
+            await human.not_found(m, guess)          # chatty jawab + admin ko request
         return
     await typing(m.chat.id)
     best, best_score = res[0]
