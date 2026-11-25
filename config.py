@@ -112,3 +112,37 @@ NOT_FOUND_TEXT = "😕 Story nahi mili. Naam check karke dobara likho."
 PICK_TEXT = "🔎 Kaun si story chahiye?"
 SAVED_TEXT = ("✅ <b>Story save ho gayi!</b>\n\n"
               "Is story ke khaas buttons ke liye: Edit Story → Story Buttons")
+
+# ───────────── Story Vault (private channel se auto import) ─────────────
+VAULT_DEFAULT_LANGUAGE = "Hindi"         # caption me Language na ho to
+VAULT_DEFAULT_STATUS = STATUS_ONGOING    # caption me Status na ho to
+VAULT_REPORT_DELAY = 8                   # bulk forward ke baad itni der shaanti = ek hi report
+VAULT_CODE_MINUTES = 10                  # connect code kitni der valid
+
+VAULT_FORMAT_HELP = (
+    "📄 <b>VAULT CAPTION FORMAT</b>\n"
+    "━━━━━━━━━━━━━━━━\n"
+    "Channel me <b>poster photo</b> ke saath ye caption daalo:\n\n"
+    "<pre>Bhai Hero, Main Villain\n"
+    "Language: Hindi\n"
+    "Status: Ongoing\n"
+    "Regular: 1378\n"
+    "Extra: 2\n"
+    "Total: 1380\n"
+    "Price: ₹99\n"
+    "Note: Roz 5 episode aate hain</pre>\n"
+    "• Pehli line = story ka naam (ya <code>Name: ...</code>)\n"
+    "• <b>Zaroori sirf:</b> Naam + Regular\n"
+    "• Language, Status, Extra, Total, Price, Note — optional\n"
+    "• Language/Status na do to Hindi / Ongoing maana jayega\n"
+    "• Total na do to Regular + Extra khud judega\n"
+    "• Status: Ongoing / Completed (ya Chalu / Complete)\n"
+    "• Post <b>edit</b> karoge to story bhi update ho jayegi\n"
+    "• Purane cards seedha <b>forward</b> bhi kar sakte ho\n"
+    "• Same naam dobara aaye to nayi nahi banegi, update hogi"
+)
+
+# ───────────── Har story ka apna channel (episode auto count) ─────────────
+TRACK_TEXT_POSTS = False     # False: sirf audio/video/file posts episode maani jayengi (text announcements nahi)
+MAX_EP_JUMP = 50             # itne se bada jump mile to admin se poochhega (galat number se bachav)
+CHANNEL_MATCH_SCORE = 88     # bot Admin bante hi channel ke naam se story match (0-100)
